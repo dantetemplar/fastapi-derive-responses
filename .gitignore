@@ -1,0 +1,6 @@
+### PyCharm ###
+.idea
+
+### Cache ###
+__pycache__
+.ruff_cache
