@@ -11,10 +11,10 @@ With `fastapi-derive-responses` you can omit ~5 lines on endpoint definition:
     "/add_user",
     responses={
 -        200: {"description": "User added successfully"},
--        400: {"description": "User already exists", "model": ErrorResponse},
--        401: {"description": "Invalid token", "model": ErrorResponse},
--        403: {"description": "Only admins and moderators can add users or You are banned", "model": ErrorResponse},
--        404: {"description": "Invalid role or User not found", "model": ErrorResponse},
+-        400: {"description": "User already exists"},
+-        401: {"description": "Invalid token"},
+-        403: {"description": "Only admins and moderators can add users or You are banned"},
+-        404: {"description": "Invalid role or User not found"},
     },
 )
 def add_user(
