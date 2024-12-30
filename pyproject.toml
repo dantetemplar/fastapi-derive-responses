@@ -1,11 +1,14 @@
 [tool.poetry]
 name = "fastapi-derive-responses"
-version = "0.1.1"
-description = ""
+version = "0.1.2"
+description = "FastAPI plugin to derive route responses based on source code."
 authors = ["Ruslan Bel'kov <ruslan.belckov@yandex.ru>"]
 readme = "README.md"
 repository = "https://github.com/dantetemplar/fastapi-derive-responses"
 license = "MIT"
+packages = [
+    { include = "fastapi_derive_responses" },
+]
 
 [tool.poetry.dependencies]
 python = "^3.12"
