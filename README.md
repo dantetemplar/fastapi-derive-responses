@@ -4,13 +4,13 @@
 on your endpoint's source code.
 This plugin helps you reduce boilerplate code by deriving response statuses and descriptions directly from your code.
 
-With `fastapi-derive-responses` you can omit ~5 lines on endpoint definition:
+With `fastapi-derive-responses` you can omit ~4 lines on endpoint definition:
 
 ```diff
 @app.get(
     "/add_user",
     responses={
--        200: {"description": "User added successfully"},
+         200: {"description": "User added successfully"},
 -        400: {"description": "User already exists"},
 -        401: {"description": "Invalid token"},
 -        403: {"description": "Only admins and moderators can add users or You are banned"},
@@ -55,8 +55,7 @@ def add_user(
 ## Known Issues
 
 Plugin works through AST parsing, so it may not work correctly with complex code structures or runtime generated code.
-Also, it may produce false positives: for example, if you raise an exception with name `HTTPException` from another
-module (not from `starlette` or `fastapi`) it will be parsed.
+Also, it may produce false positives: for example, if you raise an exception with name `HTTPException` yet not from `starlette` or `fastapi` and you have imported `starlette.HTTPException` in the same module but in some isolated scope then your exception will be considered as `starlette.HTTPException`. 
 
 ## Installation
 
