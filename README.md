@@ -45,9 +45,9 @@ def add_user(
 - [x] ^ Same behavior for dependency functions ^
 - [x] `:raises HTTPException: 401 Invalid token` in dependency function docstring parses -> `{401: {description: "Invalid
   token"}}`
-- [ ] Avoid false positives (e.g., `raise HTTPException(401)` where `HTTPException` is not from `starlette` or
+- [x] Avoid false positives (e.g., `raise HTTPException(401)` where `HTTPException` is not from `starlette` or
   `fastapi`)
-- [ ] Parse custom classes that inherit from `HTTPException`
+- [x] Parse custom classes that inherit from `HTTPException`
 - [ ] Check for custom response models
 - [ ] Allow to omit some responses from parsing
 - [ ] Code analysis for complex structures in detail and headers
@@ -68,7 +68,9 @@ pip install fastapi-derive-responses
 
 ### Basic Usage
 
-It will propagate `{404: {"description": "Item not found"}}` to OpenAPI schema.
+You can just raise subclasses of `starlette.HTTPException` in endpoint.
+
+It will propagate `{404: {"description": "Item not found"}, 400:  {"description": "Invalid item id"}}` to OpenAPI schema.
 
 ```python
 from fastapi import FastAPI, HTTPException
@@ -77,11 +79,15 @@ from fastapi_derive_responses import AutoDeriveResponsesAPIRoute
 app = FastAPI()
 app.router.route_class = AutoDeriveResponsesAPIRoute
 
+class CustomExeption(HTTPException):
+    ...
 
 @app.get("/items/{item_id}")
 def read_item(item_id: int):
     if item_id == 0:
         raise HTTPException(status_code=404, detail="Item not found")
+    if item_id == -1:
+        raise CustomExeption(status_code=400, detail="Invalid item id")
     return {"id": item_id, "name": "Item Name"}
 ```
 
@@ -117,16 +123,43 @@ def get_current_user(user_id: Annotated[int, Depends(auth_user)]):
     return {"id": user_id, "role": "admin"}
 ```
 
-Also, you can just raise `HTTPException` in your dependency function:
+Also, you can just raise subclasses of `starlette.HTTPException` in your dependency function:
 
 ```python
+class CustomException(HTTPException):
+    ...
+
 def auth_user(token: int) -> int:
     if token < 100:
         raise HTTPException(401, "Invalid token")
     user_id = token - 100
     if user_id not in statuses:
-        raise HTTPException(404, "User not found")
+        raise CustomException(404, "User not found")
     if user_id in banlist:
         raise HTTPException(403, "You are banned")
     return user_id
+```
+
+
+Also, it works then you import your custom exception from other modules:
+
+```python
+# exceptions.py
+from starlette.exceptions import HTTPException
+
+class ImportedCustomException(HTTPException):
+    ...
+```
+```python
+# main.py
+from exceptions import ImportedCustomException
+...
+
+app = FastAPI(title="Custom Exception App")
+app.router.route_class = AutoDeriveResponsesAPIRoute
+
+@app.get("/")
+def raise_custom_exception():
+    raise ImportedCustomException(status_code=601, detail="CustomException!")
+
 ```

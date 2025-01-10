@@ -7,19 +7,77 @@ import logging
 import re
 import textwrap
 from collections import defaultdict
+from typing import Callable, Any
 
 from fastapi.routing import APIRoute
+from starlette.exceptions import HTTPException
 
 logger = logging.getLogger("fastapi-derive-responses")
 
 
-def _responses_from_raise_in_source(function) -> dict:
+def _inspect_function_source(function: Callable[..., Any]) -> dict[str, bool]:
+    """
+    Parse the function's source code and inspect all imported and defined classes
+    to check if they are subclasses of HTTPException.
+    Return a dict: {class_name: bool, ...} where `True` indicates the class is a
+    subclass of HTTPException, and `False` indicates it is not.
+    """
+    # Get file contents and AST parsing
+    path = inspect.getfile(function)
+    with open(path, "r") as file:
+        content = file.read()
+
+    file_ast = ast.parse(content)
+
+    # Inspecting imports for subclasses of HTTPException
+    import_details: list[tuple[str, list[str]]] = []
+    for node in ast.walk(file_ast):
+        if isinstance(node, ast.ImportFrom):
+            module_path = node.module
+            imported_names = [alias.name for alias in node.names]
+            import_details.append((module_path, imported_names))
+
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                module_path = alias.name
+                import_details.append((module_path, [alias.name]))
+
+    inspected_subclasses = defaultdict(bool)
+    for module_path, imported_names in import_details:
+        try:
+            # Import module and accessing inspected names
+            module = importlib.import_module(module_path)
+            for name in imported_names:
+                imported_object = getattr(module, name)
+                # Check if the imported object is a subclass of HTTPException
+                if isinstance(imported_object, type) and issubclass(imported_object, HTTPException):
+                    inspected_subclasses[name] = True
+                    logger.debug(f"{name} is a subclass of HTTPException")
+        except (AttributeError, ModuleNotFoundError, ImportError) as e:
+            logger.debug(f"Error importing {module_path}: {str(e)}")
+
+    # Inspect defined classes
+    defined_classes: list[ast.ClassDef] = [node for node in ast.walk(file_ast) if isinstance(node, ast.ClassDef)]
+
+    for classDef in defined_classes:
+        # Check inheritance
+        for baseClass in classDef.bases:
+            if inspected_subclasses.get(baseClass.id):
+                inspected_subclasses[classDef.name] = True
+                logger.debug(f"{classDef.name} is a subclass of HTTPException")
+                break
+
+    return inspected_subclasses
+
+
+def _responses_from_raise_in_source(function: Callable[..., Any]) -> dict:
     """
     Parse the endpoint's source code and extract all HTTPExceptions raised.
     Return a dict: {status_code: [{"description": str, "headers": dict}, ...], ...}
     """
     derived = defaultdict(list)
 
+    exception_classes = _inspect_function_source(function)
     source = textwrap.dedent(inspect.getsource(function))
     as_ast = ast.parse(source)
     exceptions = [node for node in ast.walk(as_ast) if isinstance(node, ast.Raise)]
@@ -30,8 +88,8 @@ def _responses_from_raise_in_source(function) -> dict:
         try:
             match exception.exc:
                 case ast.Call(func=ast.Name(func_id, func_ctx), args=call_args, keywords=keywords):
-                    if func_id != "HTTPException":
-                        logger.debug(f"Exception (Call) is not HTTPException: func={func_id}")
+                    if not exception_classes[func_id]:
+                        logger.debug(f"Exception (Call) is not subclass of HTTPException: func={func_id}")
                         continue
 
                     status_code = detail = headers = None
