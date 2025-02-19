@@ -76,6 +76,7 @@ from fastapi_derive_responses import AutoDeriveResponsesAPIRoute
 
 app = FastAPI()
 app.router.route_class = AutoDeriveResponsesAPIRoute
+# router = APIRouter(route_class=AutoDeriveResponsesAPIRoute) # for router
 
 class CustomExeption(HTTPException):
     ...
