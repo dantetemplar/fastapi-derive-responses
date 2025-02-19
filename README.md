@@ -37,8 +37,7 @@ def add_user(
 - [x] `raise HTTPException(401, detail="Invalid token")` in endpoint source -> `{401: {description: "Invalid token"}}`
 - [x] `raise HTTPException(404, detail=f"User with id={id} not found")` in endpoint source -> `{404: {description: "User
   with id={id} not found"}}`
-- [x] `raise HTTPException(404, headers={"X-Error": "User not found"})` in endpoint source -> `{404: {headers: {"
-  X-Error": "User not found"}}}`
+- [x] `raise HTTPException(404, headers={"X-Error": "User not found"})` in endpoint source -> `{404: {headers: {"X-Error": "User not found"}}}`
 - [x] Multiple derived responses for the same endpoint merged into one -> `{401: {description: "Invalid token OR Token is
   expired"}}`
 - [x] Don't override manually defined responses in decorators
