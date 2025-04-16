@@ -7,7 +7,7 @@ import logging
 import re
 import textwrap
 from collections import defaultdict
-from typing import Callable, Any
+from typing import Any, Callable
 
 from fastapi.routing import APIRoute
 from starlette.exceptions import HTTPException
@@ -141,10 +141,21 @@ def _responses_from_raise_in_source(function: Callable[..., Any]) -> dict:
                         # Handle f-strings: detail=f"user_id = {id}" -> detail="user_id = {id}"
                         detail = ast.unparse(detail_ast).removeprefix("f'").removesuffix("'")
 
+
                     if isinstance(headers_ast, ast.Dict):
                         headers = {}
                         for k, v in zip(headers_ast.keys, headers_ast.values):
-                            headers[k.value] = v.value
+                            if isinstance(v, ast.Constant):
+                                headers[k.value] = v.value
+                            elif isinstance(v, ast.JoinedStr):
+                                # Handle f-strings: headers={"X-Header": f"{value}"}
+                                headers[k.value] = ast.unparse(v).removeprefix("f'").removesuffix("'")
+                            elif isinstance(v, ast.Call):
+                                # Handle function calls: headers={"X-Header": some_function() or str(some_function())}
+                                headers[k.value] = ast.unparse(v).removeprefix("str(").removesuffix(")")
+                            else:
+                                logger.debug(f"Unhandled header value type: {ast.dump(v)}")
+                                headers[k.value] = ast.unparse(v)
 
                     logger.debug(f"HTTPException: {status_code=} {detail=} {headers=}")
 
@@ -174,10 +185,16 @@ def _from_dependencies(dependencies) -> dict:
     for subdependant in dependencies:
         if not subdependant.call:
             continue
-        for status_code, responses in _responses_from_docstring_exceptions(subdependant.call).items():
-            derived[status_code].extend(responses)
-        for status_code, responses in _responses_from_raise_in_source(subdependant.call).items():
-            derived[status_code].extend(responses)
+        try:
+            for status_code, responses in _responses_from_docstring_exceptions(subdependant.call).items():
+                derived[status_code].extend(responses)
+        except Exception as e:
+            logger.error(f"Error parsing docstring exceptions: {e}", exc_info=True)
+        try:
+            for status_code, responses in _responses_from_raise_in_source(subdependant.call).items():
+                derived[status_code].extend(responses)
+        except Exception as e:
+            logger.error(f"Error parsing source exceptions: {e}", exc_info=True)
     return dict(derived)
 
 
@@ -198,9 +215,12 @@ def _responses_from_docstring_exceptions(function) -> dict:
     # Pattern: :raises HTTPException: 401 Some message
     pattern = r":raises?\s+HTTPException:\s+(\d+)\s+(.*?)(?=\n\S|$)"
     for match_obj in re.finditer(pattern, doc, re.DOTALL):
-        status_code_str, detail = match_obj.groups()
-        status_code = int(status_code_str)
-        derived[status_code].append({"description": detail, "headers": None})
+        try:
+            status_code_str, detail = match_obj.groups()
+            status_code = int(status_code_str)
+            derived[status_code].append({"description": detail, "headers": None})
+        except Exception as e:
+            logger.error(f"Error parsing docstring exceptions: {e}", exc_info=True)
 
     return dict(derived)
 
@@ -244,11 +264,18 @@ class AutoDeriveResponsesAPIRoute(APIRoute):
         super().__init__(*args, **kwargs)
 
         # 1. Parse the endpoint source to derive potential HTTPExceptions
-        derived_from_source = _responses_from_raise_in_source(self.endpoint)
+        try:
+            derived_from_source = _responses_from_raise_in_source(self.endpoint)
+        except Exception as e:
+            logger.error(f"Error parsing source exceptions: {e}", exc_info=True)
+            derived_from_source = {}
 
         # 2. Parse endpoint dependencies to derive potential HTTPExceptions
-        derived_from_dependencies = _from_dependencies(self.dependant.dependencies)
-
+        try:
+            derived_from_dependencies = _from_dependencies(self.dependant.dependencies)
+        except Exception as e:
+            logger.error(f"Error parsing dependencies: {e}", exc_info=True)
+            derived_from_dependencies = {}
         # 3. Merge the two sources of derived exceptions
         merged_responses = _merge_derived_exceptions(derived_from_source, derived_from_dependencies)
 
