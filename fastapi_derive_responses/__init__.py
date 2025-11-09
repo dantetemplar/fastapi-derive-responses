@@ -134,8 +134,10 @@ def _responses_from_raise_in_source(function: Callable[..., Any]) -> dict:
                         case ast.Attribute(ast.Attribute(ast.Name("starlette"), "status"), attr):
                             if hasattr(statuses, attr):
                                 status_code = getattr(statuses, attr)
-
-                    if isinstance(detail_ast, ast.Constant):
+                    
+                    if isinstance(detail_ast, ast.Constant) and isinstance(detail_ast.value, str):
+                        detail = detail_ast.value
+                    elif hasattr(detail_ast, "s"):
                         detail = detail_ast.s
                     elif isinstance(detail_ast, ast.JoinedStr):
                         # Handle f-strings: detail=f"user_id = {id}" -> detail="user_id = {id}"
