@@ -168,6 +168,8 @@ def _responses_from_raise_in_source(function: Callable[..., Any]) -> dict:
                             # Only accept integers as status codes
                             if isinstance(value, int):
                                 status_code = value
+                            else:
+                                logger.debug(f"Ignoring non-integer constant in status_code position: {value!r}")
                         # Name(id='HTTP_400_BAD_REQUEST', ctx=Load())
                         case ast.Name(id):
                             if hasattr(statuses, id):
