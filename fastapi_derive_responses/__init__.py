@@ -15,12 +15,13 @@ from starlette.exceptions import HTTPException
 logger = logging.getLogger("fastapi-derive-responses")
 
 
-def _inspect_function_source(function: Callable[..., Any]) -> dict[str, bool]:
+def _inspect_function_source(function: Callable[..., Any]) -> tuple[dict[str, bool], dict[str, Any]]:
     """
     Parse the function's source code and inspect all imported and defined classes
     to check if they are subclasses of HTTPException.
-    Return a dict: {class_name: bool, ...} where `True` indicates the class is a
-    subclass of HTTPException, and `False` indicates it is not.
+    Return a tuple: 
+        - dict: {class_name: bool, ...} where `True` indicates the class is a subclass of HTTPException
+        - dict: {class_name: class_object, ...} mapping class names to their actual class objects
     """
     # Get file contents and AST parsing
     path = inspect.getfile(function)
@@ -43,6 +44,7 @@ def _inspect_function_source(function: Callable[..., Any]) -> dict[str, bool]:
                 import_details.append((module_path, [alias.name]))
 
     inspected_subclasses = defaultdict(bool)
+    exception_class_objects = {}
     for module_path, imported_names in import_details:
         try:
             # Import module and accessing inspected names
@@ -52,11 +54,12 @@ def _inspect_function_source(function: Callable[..., Any]) -> dict[str, bool]:
                 # Check if the imported object is a subclass of HTTPException
                 if isinstance(imported_object, type) and issubclass(imported_object, HTTPException):
                     inspected_subclasses[name] = True
+                    exception_class_objects[name] = imported_object
                     logger.debug(f"{name} is a subclass of HTTPException")
         except (AttributeError, ModuleNotFoundError, ImportError) as e:
             logger.debug(f"Error importing {module_path}: {str(e)}")
 
-    # Inspect defined classes
+    # Inspect defined classes - try to get their actual class objects from function's globals
     defined_classes: list[ast.ClassDef] = [node for node in ast.walk(file_ast) if isinstance(node, ast.ClassDef)]
 
     for classDef in defined_classes:
@@ -65,9 +68,47 @@ def _inspect_function_source(function: Callable[..., Any]) -> dict[str, bool]:
             if inspected_subclasses.get(baseClass.id):
                 inspected_subclasses[classDef.name] = True
                 logger.debug(f"{classDef.name} is a subclass of HTTPException")
+                # Try to get the actual class object from the function's global scope
+                try:
+                    if hasattr(function, '__globals__') and classDef.name in function.__globals__:
+                        exception_class_objects[classDef.name] = function.__globals__[classDef.name]
+                except Exception as e:
+                    logger.debug(f"Could not get class object for {classDef.name}: {e}")
                 break
 
-    return inspected_subclasses
+    return inspected_subclasses, exception_class_objects
+
+
+def _extract_status_code_from_exception_class(exception_class: type) -> tuple[int | None, str | None]:
+    """
+    Try to extract the status_code and description from a custom exception class.
+    Looks for:
+    1. A `responses` class attribute with status codes and descriptions
+    2. A default `status_code` class attribute
+    
+    Returns a tuple (status_code, description) where either can be None.
+    """
+    try:
+        # Check for responses attribute (e.g., responses = {404: {"description": "..."}})
+        if hasattr(exception_class, 'responses') and isinstance(exception_class.responses, dict):
+            for status_code, response_data in exception_class.responses.items():
+                if isinstance(status_code, int):
+                    description = None
+                    if isinstance(response_data, dict) and "description" in response_data:
+                        description = response_data["description"]
+                    logger.debug(f"Found status code {status_code} with description '{description}' in {exception_class.__name__}.responses")
+                    return status_code, description
+        
+        # Check for status_code class attribute
+        if hasattr(exception_class, 'status_code'):
+            status_code = exception_class.status_code
+            if isinstance(status_code, int):
+                logger.debug(f"Found status code {status_code} in {exception_class.__name__}.status_code")
+                return status_code, None
+    except Exception as e:
+        logger.debug(f"Error extracting status code from {exception_class}: {e}")
+    
+    return None, None
 
 
 def _responses_from_raise_in_source(function: Callable[..., Any]) -> dict:
@@ -77,11 +118,15 @@ def _responses_from_raise_in_source(function: Callable[..., Any]) -> dict:
     """
     derived = defaultdict(list)
 
-    exception_classes = _inspect_function_source(function)
+    exception_classes, exception_class_objects = _inspect_function_source(function)
     source = textwrap.dedent(inspect.getsource(function))
     as_ast = ast.parse(source)
     exceptions = [node for node in ast.walk(as_ast) if isinstance(node, ast.Raise)]
 
+    # Get function location for better error messages
+    func_file = inspect.getfile(function)
+    func_name = function.__name__
+    
     for exception in exceptions:
         logger.debug(f"Exception in endpoint AST: {ast.dump(exception)}")
 
@@ -120,7 +165,9 @@ def _responses_from_raise_in_source(function: Callable[..., Any]) -> dict:
 
                     match status_code_ast:
                         case ast.Constant(value):
-                            status_code = value
+                            # Only accept integers as status codes
+                            if isinstance(value, int):
+                                status_code = value
                         # Name(id='HTTP_400_BAD_REQUEST', ctx=Load())
                         case ast.Name(id):
                             if hasattr(statuses, id):
@@ -164,13 +211,36 @@ def _responses_from_raise_in_source(function: Callable[..., Any]) -> dict:
 
                     logger.debug(f"HTTPException: {status_code=} {detail=} {headers=}")
 
+                    # If status_code couldn't be parsed, try to extract it from the exception class
+                    if not status_code and func_id in exception_class_objects:
+                        extracted_status, extracted_description = _extract_status_code_from_exception_class(exception_class_objects[func_id])
+                        if extracted_status:
+                            status_code = extracted_status
+                            # Use extracted description if we don't have one from the raise statement
+                            if not detail and extracted_description:
+                                detail = extracted_description
+                            logger.debug(f"Extracted status code {status_code} from exception class {func_id}")
+
                     if status_code:
                         derived[status_code].append({"description": detail, "headers": headers})
                     else:
+                        # Build informative warning message
+                        line_no = exception.lineno if hasattr(exception, 'lineno') else 'unknown'
+                        warning_parts = [
+                            f"[fastapi-derive-responses]",
+                            f"Could not determine status code for exception in function '{func_name}'",
+                            f"at {func_file}:{line_no}.",
+                        ]
+                        
                         if status_code_ast is not None:
-                            logger.warning(f"Invalid status code: {ast.dump(status_code_ast)}")
+                            # Only show technical details at debug level
+                            logger.debug(f"Status code AST: {ast.dump(status_code_ast)}")
+                            warning_parts.append(f"Exception class: {func_id}.")
                         else:
-                            logger.warning("Invalid status code: status_code_ast is None")
+                            warning_parts.append(f"Exception class '{func_id}' raises with no explicit status_code argument.")
+                        
+                        warning_parts.append("This exception will not appear in OpenAPI documentation.")
+                        logger.warning(" ".join(warning_parts))
                 case ast.Name(id=exc_id, ctx=ctx):
                     logger.debug(f"Exception (Name): id={exc_id}, ctx={ctx}")
                 case None:
