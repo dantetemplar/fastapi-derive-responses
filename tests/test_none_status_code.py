@@ -59,5 +59,3 @@ def test_dict_unpacking_in_headers():
     # Verify OpenAPI generation works
     response = client.get("/openapi.json")
     assert response.status_code == 200
-
-
