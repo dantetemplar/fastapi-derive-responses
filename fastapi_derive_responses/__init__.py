@@ -147,6 +147,9 @@ def _responses_from_raise_in_source(function: Callable[..., Any]) -> dict:
                     if isinstance(headers_ast, ast.Dict):
                         headers = {}
                         for k, v in zip(headers_ast.keys, headers_ast.values):
+                            # Skip None keys or values (e.g., from dictionary unpacking)
+                            if k is None or v is None:
+                                continue
                             if isinstance(v, ast.Constant):
                                 headers[k.value] = v.value
                             elif isinstance(v, ast.JoinedStr):
@@ -164,7 +167,10 @@ def _responses_from_raise_in_source(function: Callable[..., Any]) -> dict:
                     if status_code:
                         derived[status_code].append({"description": detail, "headers": headers})
                     else:
-                        logger.warning(f"Invalid status code: {ast.dump(status_code_ast)}")
+                        if status_code_ast is not None:
+                            logger.warning(f"Invalid status code: {ast.dump(status_code_ast)}")
+                        else:
+                            logger.warning("Invalid status code: status_code_ast is None")
                 case ast.Name(id=exc_id, ctx=ctx):
                     logger.debug(f"Exception (Name): id={exc_id}, ctx={ctx}")
                 case None:
